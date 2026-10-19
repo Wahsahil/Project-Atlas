@@ -6,12 +6,13 @@ from pydantic import BaseModel, Field
 
 from app.calculator import calculate_cagr_projection
 from app.knowledge import retrieve_reports
+from app.escalations import create_escalation, list_escalations
 
 
 app = FastAPI(
     title="Project Atlas",
-    description="AI-powered market research report copilot",
-    version="1.1.0",
+    description="AI-assisted market research report copilot",
+    version="1.2.0",
 )
 
 
@@ -27,10 +28,14 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "service": "Project Atlas API"}
+    return {
+        "status": "healthy",
+        "service": "Project Atlas API",
+    }
 
 
 def is_unsafe(question: str) -> bool:
+    """Detect selected unsafe requests."""
     q = question.lower()
 
     unsafe_patterns = [
@@ -49,6 +54,7 @@ def is_unsafe(question: str) -> bool:
 
 
 def extract_cagr(reports):
+    """Extract CAGR figures from retrieved report snippets."""
     values = []
 
     for item in reports:
@@ -67,7 +73,6 @@ def extract_cagr(reports):
                 "text": item["text"],
             })
 
-    # Remove duplicate matches.
     unique = {
         (
             item["report_id"],
@@ -82,12 +87,13 @@ def extract_cagr(reports):
 
 
 def extract_market_sizes(reports):
+    """Extract market sizes from retrieved report snippets."""
     values = []
 
     for item in reports:
         match = re.search(
-            r"(?:2024\s+)?global market size:\s*USD\s*([\d.]+)"
-            r"\s*billion",
+            r"(?:2024\s+)?global market size:\s*USD\s*"
+            r"([\d.]+)\s*billion",
             item["text"],
             re.IGNORECASE,
         )
@@ -103,8 +109,7 @@ def extract_market_sizes(reports):
 
 
 def requested_target_year(question: str):
-    """Return an explicit four-digit target year, if present."""
-
+    """Return the last four-digit year in a question, if present."""
     matches = re.findall(r"\b(20\d{2})\b", question)
 
     if not matches:
@@ -114,6 +119,7 @@ def requested_target_year(question: str):
 
 
 def wants_projection(question: str) -> bool:
+    """Identify questions asking for a forecast or projection."""
     q = question.lower()
 
     projection_terms = (
@@ -132,16 +138,36 @@ def wants_projection(question: str) -> bool:
     return any(term in q for term in projection_terms)
 
 
+def save_escalation_if_needed(
+    client_id: str,
+    question: str,
+    answer: str,
+    confidence: float,
+    escalated: bool,
+):
+    """Create a persistent local ticket when human review is needed."""
+    if not escalated:
+        return None
+
+    return create_escalation(
+        client_id=client_id,
+        question=question,
+        reason=answer,
+        confidence=confidence,
+    )
+
+
 @app.post("/chat")
 def chat(request: ChatRequest):
     question = request.question.strip()
     q = question.lower()
 
+    # Refuse selected unsafe requests.
     if is_unsafe(question):
         return {
             "answer": (
-                "I cannot disclose private client information or perform "
-                "destructive database actions."
+                "I cannot disclose private client information "
+                "or perform destructive database actions."
             ),
             "citations": [],
             "confidence": 1.0,
@@ -150,6 +176,7 @@ def chat(request: ChatRequest):
             "escalated": False,
         }
 
+    # Retrieval checks the configured client entitlement rules.
     reports = retrieve_reports(
         request.client_id,
         question,
@@ -157,16 +184,29 @@ def chat(request: ChatRequest):
     )
 
     if not reports:
+        answer = (
+            "No authorized report evidence was found. "
+            "Please clarify the question or request human review."
+        )
+        confidence = 0.0
+        escalated = True
+
+        ticket = save_escalation_if_needed(
+            client_id=request.client_id,
+            question=question,
+            answer=answer,
+            confidence=confidence,
+            escalated=escalated,
+        )
+
         return {
-            "answer": (
-                "No authorized report evidence was found. Please clarify "
-                "the question or escalate it for review."
-            ),
+            "answer": answer,
             "citations": [],
-            "confidence": 0.0,
+            "confidence": confidence,
             "conflicts": [],
             "derived_values": [],
-            "escalated": True,
+            "escalated": escalated,
+            "escalation_ticket": ticket,
         }
 
     citations = [
@@ -185,10 +225,9 @@ def chat(request: ChatRequest):
     confidence = 0.5
     escalated = False
 
-    # Handle explicit projection requests.
+    # Handle projection questions.
     if wants_projection(question):
         target_year = requested_target_year(question)
-
         usable_pairs = []
 
         for market in market_values:
@@ -196,23 +235,21 @@ def chat(request: ChatRequest):
                 if market["report_id"] != cagr["report_id"]:
                     continue
 
-                # The report's stated CAGR period must support the
-                # requested projection horizon.
                 if target_year is None:
                     continue
 
+                # Only allow projections within the source's stated
+                # CAGR period. The calculation still requires careful
+                # interpretation of the base year and assumptions.
                 if not (
-                    cagr["start_year"] <= target_year
+                    cagr["start_year"]
+                    <= target_year
                     <= cagr["end_year"]
                 ):
                     continue
 
                 base_year = 2024
 
-                # Do not project from a 2024 base using a CAGR that
-                # starts in 2025 unless the calculation convention is
-                # explicitly declared. This implementation requires
-                # the CAGR period to start in the base year.
                 if cagr["start_year"] != base_year:
                     continue
 
@@ -241,31 +278,36 @@ def chat(request: ChatRequest):
                 **projection,
                 "assumption": (
                     "Compound annual growth is applied to the stated "
-                    "base value for the specified number of years."
+                    "base value for the specified number of years. "
+                    "This is a calculation under that assumption, "
+                    "not a source-published forecast."
                 ),
             })
 
             answer = (
-                f"The calculated projection for {target_year} is "
-                f"USD {projection['projected_value']:.2f} billion, "
-                f"using the 2024 base value of "
-                f"USD {market['value_usd_billion']:.2f} billion and "
-                f"a CAGR of {cagr['cagr_percent']}% for "
-                f"{years} compounding years."
+                f"The calculated projection for {target_year} is USD "
+                f"{projection['projected_value']:.2f} billion, using "
+                f"the 2024 base value of USD "
+                f"{market['value_usd_billion']:.2f} billion and a CAGR "
+                f"of {cagr['cagr_percent']}% for {years} compounding "
+                "years. Treat this as an illustrative calculation "
+                "under the stated assumptions."
             )
+
             confidence = 0.85
 
         else:
             answer = (
-                "I could not calculate this projection reliably from the "
-                "authorized excerpts. The available base value and CAGR "
-                "must refer to a compatible market scope and period. "
-                "Human review is required."
+                "I could not calculate this projection reliably from "
+                "the authorized excerpts. The base value, market scope, "
+                "and CAGR period must be compatible. Human review is "
+                "required."
             )
+
             confidence = 0.25
             escalated = True
 
-    # Handle CAGR questions and comparisons.
+    # Handle CAGR questions and conflicting values.
     elif "cagr" in q or "growth rate" in q:
         unique_values = {
             (
@@ -303,23 +345,29 @@ def chat(request: ChatRequest):
                     for report_id, rate, start, end in values
                 ],
                 "explanation": (
-                    "The reports use different forecast periods and may "
-                    "use different market scopes."
+                    "The reports use different forecast periods and "
+                    "may use different market scopes."
                 ),
             })
+
             confidence = 0.85
 
         elif values:
             report_id, rate, start, end = values[0]
 
             answer = (
-                f"{report_id} reports a CAGR of {rate}% for "
-                f"{start}–{end}."
+                f"{report_id} reports a CAGR of {rate}% "
+                f"for {start}–{end}."
             )
+
             confidence = 0.9
 
         else:
-            answer = "No authorized CAGR figure was found in the retrieved excerpts."
+            answer = (
+                "No authorized CAGR figure was found in the "
+                "retrieved excerpts."
+            )
+
             confidence = 0.25
             escalated = True
 
@@ -332,16 +380,18 @@ def chat(request: ChatRequest):
                 for item in market_values
             ) + "."
 
-            if len({
+            distinct_values = {
                 item["value_usd_billion"]
                 for item in market_values
-            }) > 1:
+            }
+
+            if len(distinct_values) > 1:
                 conflicts.append({
                     "type": "different_market_size_figures",
                     "values": market_values,
                     "explanation": (
-                        "Market definitions and included segments must be "
-                        "checked before comparing these figures."
+                        "Market definitions and included segments "
+                        "must be checked before comparing these figures."
                     ),
                 })
 
@@ -352,18 +402,28 @@ def chat(request: ChatRequest):
                 "The retrieved excerpts do not contain a market-size "
                 "figure that answers this question."
             )
+
             confidence = 0.3
             escalated = True
 
     else:
         answer = (
-            "Relevant authorized report excerpts were retrieved, but this "
-            "prototype cannot reliably answer this question yet."
+            "Relevant authorized report excerpts were retrieved, "
+            "but this prototype cannot reliably answer this question yet."
         )
+
         confidence = 0.3
         escalated = True
 
-    return {
+    ticket = save_escalation_if_needed(
+        client_id=request.client_id,
+        question=question,
+        answer=answer,
+        confidence=confidence,
+        escalated=escalated,
+    )
+
+    response = {
         "answer": answer,
         "citations": citations,
         "confidence": confidence,
@@ -372,11 +432,18 @@ def chat(request: ChatRequest):
         "escalated": escalated,
     }
 
+    if ticket is not None:
+        response["escalation_ticket"] = ticket
+
+    return response
+
 
 @app.get("/escalations")
 def escalations():
-    # Persistent MySQL escalation tickets are not implemented yet.
+    """List locally persisted human-review tickets."""
+    items = list_escalations()
+
     return {
-        "items": [],
-        "note": "Persistent escalation storage is not configured yet.",
+        "items": items,
+        "count": len(items),
     }
