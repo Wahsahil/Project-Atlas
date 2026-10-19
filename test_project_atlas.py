@@ -62,3 +62,30 @@ def test_public_report_r102_accessible_to_c02():
     )
 
     assert any(item["report_id"] == "R-102" for item in results)
+    
+    
+def test_c02_cannot_explicitly_request_r101():
+    results = retrieve_reports(
+        "C-02",
+        "What is the market size in R-101?"
+    )
+    assert results == []
+
+
+def test_new_report_ids_are_recognized():
+    from app.knowledge import extract_report_ids
+
+    assert extract_report_ids("Show me R-104") == {"R-104"}
+    assert extract_report_ids("Compare R-105 and R-106") == {
+        "R-105",
+        "R-106",
+    }
+
+
+def test_new_reports_are_not_automatically_authorized():
+    results = retrieve_reports(
+        "C-01",
+        "Tell me about R-104"
+    )
+    assert results == []
+
