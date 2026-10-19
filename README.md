@@ -1,9 +1,19 @@
-::: {align="center"}
 # 🌊 Project Atlas
 
-### Market Research Report Copilot --- Prototype
+### Market Research Report Copilot — Prototype
 
 **Find evidence. Compare market figures. Escalate uncertainty.**
+
+![Python](https://img.shields.io/badge/Python-3.x-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
+![Tests](https://img.shields.io/badge/Automated%20tests-12%20passing-2ea44f)
+![Status](https://img.shields.io/badge/Project-Prototype-orange)
+
+*A small, evidence-oriented API prototype exploring how market-research reports can be searched and compared with access controls and escalation for uncertain answers.*
+
+---
+
+
 
 ![Python](https://img.shields.io/badge/Python-3.x-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
