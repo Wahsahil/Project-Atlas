@@ -1,5 +1,6 @@
 
 from fastapi import FastAPI
+from knowledge import retrieve_reports
 
 app = FastAPI(
     title="Project Atlas",
