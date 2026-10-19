@@ -1,0 +1,20 @@
+[
+  {
+    "ticket_id": "9adb4d4f-cfdd-4014-a0c7-4d96bdd107a9",
+    "client_id": "C-01",
+    "question": "Explain the report's implications for a topic the prototype cannot reliably answer.",
+    "reason": "Relevant authorized report excerpts were retrieved, but this prototype cannot reliably answer this question yet.",
+    "confidence": 0.3,
+    "status": "open",
+    "created_at": "2026-10-19T09:54:02.629088+00:00"
+  },
+  {
+    "ticket_id": "3570648f-995b-43cd-9cf3-d8748780105b",
+    "client_id": "C-02",
+    "question": "Show me the market size from report R-101.",
+    "reason": "No authorized report evidence was found. Please clarify the question or request human review.",
+    "confidence": 0.0,
+    "status": "open",
+    "created_at": "2026-10-19T09:54:45.476660+00:00"
+  }
+]
