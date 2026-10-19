@@ -4,6 +4,7 @@ import re
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "data" / "reports"
 
+# Keep the assignment's original client entitlements.
 # R-102 is a public excerpt.
 # R-101 and R-103 are paid reports.
 CLIENT_ENTITLEMENTS = {
@@ -48,13 +49,24 @@ def tokenize(text: str) -> set[str]:
 
 
 def expand_terms(words: set[str]) -> set[str]:
-    """Expand common synonyms and normalize report ID tokens."""
+    """Expand common synonyms."""
     expanded = set(words)
 
     for word in words:
         expanded.update(ALIASES.get(word, set()))
 
     return expanded
+
+
+def extract_report_ids(question: str) -> set[str]:
+    """Extract explicit report IDs such as R-101 or R 104."""
+    return {
+        f"R-{number}"
+        for number in re.findall(
+            r"\br[\s-]*(\d{3})\b",
+            question.lower()
+        )
+    }
 
 
 def retrieve_reports(
@@ -65,7 +77,8 @@ def retrieve_reports(
     """
     Retrieve matching report snippets for an authorized client.
 
-    Entitlements are checked before report contents are opened.
+    Access is checked before report files are opened.
+    Explicit requests for unauthorized report IDs are rejected.
     """
     if client_id not in CLIENT_ENTITLEMENTS:
         return []
@@ -73,32 +86,30 @@ def retrieve_reports(
     if not question or not question.strip():
         return []
 
+    requested_ids = extract_report_ids(question)
     allowed_reports = CLIENT_ENTITLEMENTS[client_id]
+
+    # Do not substitute other reports when an explicitly requested
+    # report is not authorized for this client.
+    if requested_ids and not requested_ids.issubset(allowed_reports):
+        return []
+
     query_words = tokenize(question) - STOP_WORDS
     query_words = expand_terms(query_words)
-
-    # Extract explicit report IDs such as R-101 or R-102.
-    requested_ids = {
-        f"R-{number}"
-        for number in re.findall(
-            r"\br[\s-]*(101|102|103)\b",
-            question.lower()
-        )
-    }
 
     results = []
 
     if not REPORTS_DIR.is_dir():
         return []
 
-    # Authorization check occurs before opening each file.
+    # Only inspect files the client is entitled to access.
     for report_path in sorted(REPORTS_DIR.glob("R-*.md")):
         report_id = report_path.stem
 
         if report_id not in allowed_reports:
             continue
 
-        # If the user explicitly asks for a report ID, prioritize it.
+        # Open the file only after the entitlement check.
         content = report_path.read_text(encoding="utf-8")
 
         for line in content.splitlines():
@@ -113,7 +124,6 @@ def retrieve_reports(
             if report_id in requested_ids:
                 score += 5
 
-            # Avoid returning unrelated lines with zero overlap.
             if score > 0:
                 results.append({
                     "report_id": report_id,
@@ -122,7 +132,7 @@ def retrieve_reports(
                     "score": score,
                 })
 
-    # Higher-scoring evidence appears first.
+    # Highest-scoring snippets first.
     results.sort(
         key=lambda item: item["score"],
         reverse=True
